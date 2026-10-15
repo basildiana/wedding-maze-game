@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Path to the Chuppah — A Wedding Maze Game</title>
+  <meta name="description" content="A romantic wedding-themed maze game. Guide the Bride through the maze to meet her Groom under the chuppah." />
+  <meta name="theme-color" content="#f7dfe3" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%8D%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="hud" id="hud" aria-live="polite">
+      <div class="hud-item">
+        <span class="hud-label">Level</span>
+        <span class="hud-value" id="hudLevel">1</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">Time</span>
+        <span class="hud-value" id="hudTime">0:00</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">Hearts</span>
+        <span class="hud-value" id="hudHearts">0 / 0</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">Score</span>
+        <span class="hud-value" id="hudScore">0</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">Lives</span>
+        <span class="hud-value lives" id="hudLives">♥♥♥</span>
+      </div>
+      <div class="hud-actions">
+        <button class="icon-btn" id="btnMute" title="Toggle sound (M)" aria-label="Toggle sound">♪</button>
+        <button class="icon-btn" id="btnPause" title="Pause (P / Esc)" aria-label="Pause">❚❚</button>
+      </div>
+    </header>
+
+    <section class="stage" id="stage">
+      <canvas id="game" aria-label="Wedding maze game board"></canvas>
+
+      <!-- Start screen -->
+      <div class="overlay show" id="screenStart">
+        <div class="card">
+          <div class="rings" aria-hidden="true">💍</div>
+          <h1 class="script">Path to the Chuppah</h1>
+          <p class="subtitle">A wedding maze adventure</p>
+          <div class="divider" aria-hidden="true"><span>❦</span></div>
+          <p>Guide the <strong>Bride</strong> through the maze to meet her <strong>Groom</strong> under the chuppah.</p>
+          <ul class="howto">
+            <li><kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move</li>
+            <li>Collect <span class="pink">♥ hearts</span> for bonus points</li>
+            <li>Dodge flying rings, champagne corks, wandering guests &amp; ringing clocks</li>
+            <li><kbd>P</kbd> pause · <kbd>M</kbd> sound</li>
+          </ul>
+          <button class="btn primary" id="btnStart">Start Game</button>
+          <p class="best" id="bestScore"></p>
+        </div>
+      </div>
+
+      <!-- Pause screen -->
+      <div class="overlay" id="screenPause">
+        <div class="card small">
+          <h2 class="script">Paused</h2>
+          <p>Take a breath — the guests will wait.</p>
+          <button class="btn primary" id="btnResume">Resume</button>
+          <button class="btn ghost" id="btnQuit">Main Menu</button>
+        </div>
+      </div>
+
+      <!-- Win screen -->
+      <div class="overlay" id="screenWin">
+        <div class="card">
+          <div class="rings" aria-hidden="true">💕</div>
+          <h2 class="script">You Made It to the Chuppah!</h2>
+          <p class="subtitle">Mazel tov to the happy couple!</p>
+          <div class="divider" aria-hidden="true"><span>❦</span></div>
+          <dl class="stats" id="winStats"></dl>
+          <button class="btn primary" id="btnNext">Next Level</button>
+          <button class="btn ghost" id="btnMenuWin">Main Menu</button>
+        </div>
+      </div>
+
+      <!-- Lose screen -->
+      <div class="overlay" id="screenLose">
+        <div class="card">
+          <div class="rings" aria-hidden="true">💔</div>
+          <h2 class="script">Try Again</h2>
+          <p class="subtitle">The wedding can't start without you!</p>
+          <div class="divider" aria-hidden="true"><span>❦</span></div>
+          <dl class="stats" id="loseStats"></dl>
+          <button class="btn primary" id="btnRetry">Try Again</button>
+          <button class="btn ghost" id="btnMenuLose">Main Menu</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Touch controls (shown only on touch devices) -->
+    <div class="dpad" id="dpad" aria-hidden="true">
+      <button data-dir="up" class="dp up">▲</button>
+      <button data-dir="left" class="dp left">◀</button>
+      <button data-dir="right" class="dp right">▶</button>
+      <button data-dir="down" class="dp down">▼</button>
+    </div>
+
+    <footer class="foot">Made with ♥ in vanilla HTML, CSS &amp; JavaScript</footer>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
