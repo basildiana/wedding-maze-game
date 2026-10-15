@@ -8,8 +8,10 @@
   // ---------------------------------------------------------------------------
   const T = 32;                 // logical tile size (canvas units)
   const MAX_LIVES = 3;
+  const RING_BONUS = 500;
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   const BEST_KEY = 'chuppahMazeBest';
+  const SETUP_KEY = 'chuppahMazeSetup';
 
   const COLORS = {
     floorA: '#fffaf3',
@@ -20,12 +22,28 @@
     goldLight: '#e8cf8f',
     rose: '#d8798c',
     roseDark: '#b4566b',
+    p2: '#6f9fb8',
     ink: '#5a3f47',
     confetti: ['#f4b6c2', '#e8cf8f', '#ffffff', '#c9a24b', '#cfe3d0', '#d8c3e8', '#f7dfe3']
   };
   const GUEST_OUTFITS = ['#a7c4e5', '#c9b3e3', '#f2c18d', '#9fcfb3', '#e89aa8', '#8fb8b0', '#d6a1c9'];
   const SKINS = ['#f6d3c0', '#e8b896', '#c98f6b', '#8d5a3f', '#f1c7a8'];
   const HAIRS = ['#3b2a24', '#7a4b3a', '#c99a5b', '#1f1a1c', '#a35a3c', '#d9d0c7'];
+
+  // Character looks used to build each couple
+  const LOOKS = {
+    brideVeil: { type: 'woman', skin: '#f6d3c0', hair: '#7a4b3a', dress: '#ffffff', head: 'veil', flowers: [COLORS.rose, '#f4b6c2', '#ffffff'] },
+    brideCrown: { type: 'woman', skin: '#c98f6b', hair: '#2b1d18', dress: '#fff6ea', head: 'crown', flowers: ['#c9b3e3', '#ffffff', '#e8cf8f'] },
+    groomBlack: { type: 'man', skin: '#e8b896', hair: '#3b2a24', suit: '#3d3540', trousers: '#2e2830', tie: '#1f1a1c', flower: COLORS.rose },
+    groomNavy: { type: 'man', skin: '#f1c7a8', hair: '#a35a3c', suit: '#34405e', trousers: '#283149', tie: '#c9a24b', flower: '#f4b6c2' },
+    groomIvory: { type: 'man', skin: '#8d5a3f', hair: '#1f1a1c', suit: '#ebe3d4', trousers: '#cfc4b1', tie: '#b4566b', flower: '#9fbf95' }
+  };
+
+  const COUPLES = {
+    mw: { label: 'Woman & Man', a: LOOKS.brideVeil, b: LOOKS.groomBlack, names: ['the Bride', 'the Groom'] },
+    ww: { label: 'Two Women', a: LOOKS.brideVeil, b: LOOKS.brideCrown, names: ['the Bride with the veil', 'the Bride with the flower crown'] },
+    mm: { label: 'Two Men', a: LOOKS.groomNavy, b: LOOKS.groomIvory, names: ['the Groom in navy', 'the Groom in ivory'] }
+  };
 
   const $ = (id) => document.getElementById(id);
   const rand = (a, b) => a + Math.random() * (b - a);
@@ -35,6 +53,7 @@
   const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const center = (t) => (t + 0.5) * T;
+  const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   const shuffle = (arr) => {
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -54,9 +73,12 @@
   const canvas = $('game');
   const ctx = canvas.getContext('2d');
   const stage = $('stage');
+  const toastEl = $('toast');
   const mazeLayer = document.createElement('canvas');
   const screens = {
     start: $('screenStart'),
+    couple: $('screenCouple'),
+    mode: $('screenMode'),
     pause: $('screenPause'),
     win: $('screenWin'),
     lose: $('screenLose')
@@ -65,6 +87,7 @@
     level: $('hudLevel'),
     time: $('hudTime'),
     hearts: $('hudHearts'),
+    ring: $('hudRing'),
     score: $('hudScore'),
     lives: $('hudLives')
   };
@@ -97,6 +120,9 @@
       osc.start(t0);
       osc.stop(t0 + dur + 0.05);
     },
+    click() {
+      this.tone(880, 0.06, { type: 'triangle', vol: 0.05 });
+    },
     start() {
       this.tone(659.25, 0.15, { type: 'triangle' });
       this.tone(987.77, 0.3, { type: 'triangle', delay: 0.1 });
@@ -104,6 +130,10 @@
     pickup() {
       this.tone(880, 0.1, { type: 'triangle', vol: 0.1 });
       this.tone(1318.5, 0.18, { type: 'triangle', vol: 0.1, delay: 0.06 });
+    },
+    ring() {
+      [783.99, 987.77, 1174.66, 1567.98].forEach((f, i) =>
+        this.tone(f, 0.35, { type: 'sine', vol: 0.1, delay: i * 0.08 }));
     },
     hit() {
       this.tone(240, 0.35, { type: 'sawtooth', vol: 0.08, slide: 0.4 });
@@ -154,7 +184,7 @@
     }
 
     // Knock out a few extra walls so there is more than one route
-    // (gives the player room to dodge obstacles).
+    // (gives the players room to dodge obstacles).
     for (let y = 1; y < size - 1; y++) {
       for (let x = 1; x < size - 1; x++) {
         if (!grid[y * size + x]) continue;
@@ -163,19 +193,30 @@
       }
     }
 
-    const maze = {
+    // Open a 3x3 plaza at the exact centre for the chuppah.
+    // n is always odd, so the centre tile is a cell and the plaza joins the maze.
+    const mid = n;
+    for (let y = mid - 1; y <= mid + 1; y++) {
+      for (let x = mid - 1; x <= mid + 1; x++) grid[y * size + x] = 0;
+    }
+
+    return {
       size,
       grid,
+      mid,
       isWall(tx, ty) {
         return tx < 0 || ty < 0 || tx >= size || ty >= size || grid[ty * size + tx] === 1;
+      },
+      inPlaza(tx, ty) {
+        return Math.abs(tx - mid) <= 1 && Math.abs(ty - mid) <= 1;
       }
     };
-    return maze;
   }
 
   function bfs(maze, from) {
     const { size } = maze;
     const d = new Int32Array(size * size).fill(-1);
+    const prev = new Int32Array(size * size).fill(-1);
     const queue = [[from.x, from.y]];
     d[from.y * size + from.x] = 0;
     for (let i = 0; i < queue.length; i++) {
@@ -185,10 +226,22 @@
         const ny = y + dy;
         if (maze.isWall(nx, ny) || d[ny * size + nx] !== -1) continue;
         d[ny * size + nx] = d[y * size + x] + 1;
+        prev[ny * size + nx] = y * size + x;
         queue.push([nx, ny]);
       }
     }
-    return d;
+    return { d, prev };
+  }
+
+  function pathTo(maze, search, to) {
+    const { size } = maze;
+    const path = [];
+    let i = to.y * size + to.x;
+    while (i !== -1) {
+      path.unshift({ x: i % size, y: Math.floor(i / size) });
+      i = search.prev[i];
+    }
+    return path;
   }
 
   function runLength(maze, tx, ty, dx, dy) {
@@ -198,7 +251,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Obstacles
+  // Hazards (rings are no longer hazards — there is one collectable ring)
   // ---------------------------------------------------------------------------
   class Guest {
     constructor(tx, ty, diff) {
@@ -218,7 +271,15 @@
       this.chooseNext();
     }
     chooseNext() {
-      const open = DIRS.filter(([dx, dy]) => !game.maze.isWall(this.tx + dx, this.ty + dy));
+      const m = game.maze;
+      // Guests never wander under the chuppah — it is a safe zone.
+      const open = DIRS.filter(([dx, dy]) =>
+        !m.isWall(this.tx + dx, this.ty + dy) && !m.inPlaza(this.tx + dx, this.ty + dy));
+      if (!open.length) {
+        this.dir = [0, 0];
+        this.pause = 0.5;
+        return;
+      }
       let choices = open;
       if (this.dir) {
         const forward = open.filter(([dx, dy]) => !(dx === -this.dir[0] && dy === -this.dir[1]));
@@ -234,6 +295,7 @@
       this.bob += dt * 9;
       if (this.pause > 0) {
         this.pause -= dt;
+        if (this.pause <= 0 && this.dir[0] === 0 && this.dir[1] === 0) this.chooseNext();
         return;
       }
       const tx = center(this.tx + this.dir[0]);
@@ -260,7 +322,6 @@
       c.save();
       c.translate(this.x, this.y + bob);
       shadow(c, 0, s * 0.4, s * 0.26);
-      // body
       c.fillStyle = this.outfit;
       c.beginPath();
       c.moveTo(-s * 0.12, -s * 0.12);
@@ -283,7 +344,6 @@
       c.lineTo(s * 0.26, -s * 0.02);
       c.closePath();
       c.fill();
-      // head
       c.fillStyle = this.skin;
       c.beginPath();
       c.arc(0, -s * 0.25, s * 0.14, 0, Math.PI * 2);
@@ -294,75 +354,11 @@
       c.fill();
       eyes(c, 0, -s * 0.24, s);
       if (!moving) {
-        // chatting — little music note
         c.fillStyle = COLORS.roseDark;
         c.font = `${Math.round(s * 0.35)}px serif`;
         c.textAlign = 'center';
         c.fillText('♪', s * 0.25, -s * 0.48);
       }
-      c.restore();
-    }
-  }
-
-  class Ring {
-    constructor(tx, ty, axis, diff) {
-      this.kind = 'ring';
-      this.x = center(tx);
-      this.y = center(ty);
-      this.r = T * 0.22;
-      const sign = Math.random() < 0.5 ? 1 : -1;
-      this.dir = axis === 'h' ? [sign, 0] : [0, sign];
-      this.speed = T * 2.5 * diff * rand(0.9, 1.15);
-      this.spin = rand(0, Math.PI * 2);
-      this.trail = [];
-    }
-    get harmful() { return true; }
-    get hitR() { return this.r; }
-    update(dt) {
-      this.spin += dt * 7;
-      this.trail.unshift({ x: this.x, y: this.y });
-      if (this.trail.length > 6) this.trail.pop();
-      this.x += this.dir[0] * this.speed * dt;
-      this.y += this.dir[1] * this.speed * dt;
-      const tx = Math.floor(this.x / T);
-      const ty = Math.floor(this.y / T);
-      const cx = center(tx);
-      const cy = center(ty);
-      const past = (this.x - cx) * this.dir[0] + (this.y - cy) * this.dir[1];
-      if (past >= 0 && game.maze.isWall(tx + this.dir[0], ty + this.dir[1])) {
-        this.x = cx;
-        this.y = cy;
-        this.dir = [-this.dir[0], -this.dir[1]];
-      }
-    }
-    draw(c) {
-      this.trail.forEach((p, i) => {
-        c.fillStyle = `rgba(232, 207, 143, ${0.25 - i * 0.04})`;
-        c.beginPath();
-        c.arc(p.x, p.y, this.r * (1 - i * 0.1), 0, Math.PI * 2);
-        c.fill();
-      });
-      const rx = this.r * Math.max(0.22, Math.abs(Math.cos(this.spin)));
-      c.save();
-      c.translate(this.x, this.y);
-      c.lineWidth = T * 0.075;
-      c.strokeStyle = COLORS.gold;
-      c.beginPath();
-      c.ellipse(0, 0, rx, this.r, 0, 0, Math.PI * 2);
-      c.stroke();
-      c.lineWidth = T * 0.025;
-      c.strokeStyle = '#f6e3b0';
-      c.beginPath();
-      c.ellipse(0, 0, rx, this.r, 0, Math.PI * 1.1, Math.PI * 1.6);
-      c.stroke();
-      // diamond
-      c.translate(0, -this.r - T * 0.05);
-      c.rotate(Math.PI / 4);
-      const d = T * 0.11;
-      c.fillStyle = '#d7eef8';
-      c.fillRect(-d / 2, -d / 2, d, d);
-      c.fillStyle = '#ffffff';
-      c.fillRect(-d / 2, -d / 2, d / 2.4, d / 2.4);
       c.restore();
     }
   }
@@ -393,7 +389,7 @@
           this.x = this.bx + this.dir[0] * T * 0.25;
           this.y = this.by + this.dir[1] * T * 0.25;
           burst(this.x, this.y, 10, 'spark', ['#ffffff', COLORS.goldLight]);
-          if (game.player && dist(this, game.player) < T * 7) Sound.pop();
+          if (game.mode === 'play' && controlledChars().some((ch) => dist(this, ch) < T * 7)) Sound.pop();
         }
         return;
       }
@@ -418,7 +414,6 @@
       }
     }
     draw(c) {
-      // bottle (harmless decoration that shakes just before it pops)
       const warn = this.state === 'wait' && this.timer < 0.6;
       const shake = warn ? Math.sin(performance.now() / 25) * 0.12 : 0;
       c.save();
@@ -501,13 +496,11 @@
       }
       shadow(c, 0, r + 2, r * 0.9);
       if (st !== 'calm') c.rotate(Math.sin(performance.now() / (st === 'ring' ? 18 : 40)) * 0.18);
-      // bells
       c.fillStyle = COLORS.gold;
       c.beginPath();
       c.arc(-r * 0.7, -r * 0.85, r * 0.38, Math.PI, Math.PI * 2);
       c.arc(r * 0.7, -r * 0.85, r * 0.38, Math.PI, Math.PI * 2);
       c.fill();
-      // face
       c.fillStyle = COLORS.gold;
       c.beginPath();
       c.arc(0, 0, r, 0, Math.PI * 2);
@@ -664,190 +657,6 @@
     c.fill();
   }
 
-  function drawBride(c, x, y, { bob = 0, lean = 0, alpha = 1 } = {}) {
-    const s = T * 1.05;
-    c.save();
-    c.globalAlpha = alpha;
-    c.translate(x, y + bob);
-    shadow(c, 0, s * 0.4, s * 0.3);
-    c.rotate(lean);
-    // veil (behind)
-    c.fillStyle = 'rgba(255, 255, 255, 0.8)';
-    c.strokeStyle = 'rgba(220, 200, 205, 0.8)';
-    c.lineWidth = 0.8;
-    c.beginPath();
-    c.moveTo(-s * 0.12, -s * 0.36);
-    c.quadraticCurveTo(-s * 0.36, -s * 0.05, -s * 0.3, s * 0.22);
-    c.lineTo(s * 0.3, s * 0.22);
-    c.quadraticCurveTo(s * 0.36, -s * 0.05, s * 0.12, -s * 0.36);
-    c.closePath();
-    c.fill();
-    c.stroke();
-    // dress
-    c.fillStyle = '#ffffff';
-    c.strokeStyle = '#e6d2d6';
-    c.lineWidth = 1;
-    c.beginPath();
-    c.moveTo(-s * 0.1, -s * 0.1);
-    c.quadraticCurveTo(-s * 0.16, s * 0.15, -s * 0.34, s * 0.4);
-    c.quadraticCurveTo(0, s * 0.48, s * 0.34, s * 0.4);
-    c.quadraticCurveTo(s * 0.16, s * 0.15, s * 0.1, -s * 0.1);
-    c.closePath();
-    c.fill();
-    c.stroke();
-    // bodice
-    c.beginPath();
-    roundRect(c, -s * 0.1, -s * 0.2, s * 0.2, s * 0.13, s * 0.04);
-    c.fill();
-    c.stroke();
-    // sash
-    c.fillStyle = COLORS.goldLight;
-    c.fillRect(-s * 0.105, -s * 0.09, s * 0.21, s * 0.03);
-    // bouquet
-    c.fillStyle = '#9fbf95';
-    c.beginPath();
-    c.moveTo(-s * 0.02, s * 0.02);
-    c.lineTo(s * 0.02, s * 0.14);
-    c.lineTo(s * 0.06, s * 0.02);
-    c.fill();
-    [[-0.04, -0.01, COLORS.rose], [0.04, -0.02, '#f4b6c2'], [0, -0.05, '#ffffff'], [0.08, 0.02, '#f4b6c2']]
-      .forEach(([bx, by, col]) => {
-        c.fillStyle = col;
-        c.beginPath();
-        c.arc(s * bx, s * by, s * 0.04, 0, Math.PI * 2);
-        c.fill();
-      });
-    // head
-    c.fillStyle = '#f6d3c0';
-    c.beginPath();
-    c.arc(0, -s * 0.3, s * 0.12, 0, Math.PI * 2);
-    c.fill();
-    // hair
-    c.fillStyle = '#7a4b3a';
-    c.beginPath();
-    c.arc(0, -s * 0.33, s * 0.125, Math.PI * 1.02, Math.PI * 1.98);
-    c.fill();
-    c.beginPath();
-    c.arc(0, -s * 0.44, s * 0.06, 0, Math.PI * 2);
-    c.fill();
-    // tiara
-    c.fillStyle = COLORS.gold;
-    c.beginPath();
-    c.moveTo(-s * 0.08, -s * 0.41);
-    c.lineTo(-s * 0.04, -s * 0.47);
-    c.lineTo(0, -s * 0.42);
-    c.lineTo(s * 0.04, -s * 0.47);
-    c.lineTo(s * 0.08, -s * 0.41);
-    c.closePath();
-    c.fill();
-    eyes(c, 0, -s * 0.29, s);
-    cheeks(c, 0, -s * 0.29, s);
-    c.restore();
-  }
-
-  function drawGroom(c, x, y, { bob = 0, lean = 0 } = {}) {
-    const s = T * 1.05;
-    c.save();
-    c.translate(x, y + bob);
-    shadow(c, 0, s * 0.4, s * 0.24);
-    c.rotate(lean);
-    // legs
-    c.fillStyle = '#2e2830';
-    c.fillRect(-s * 0.1, s * 0.15, s * 0.08, s * 0.25);
-    c.fillRect(s * 0.02, s * 0.15, s * 0.08, s * 0.25);
-    // jacket
-    c.fillStyle = '#3d3540';
-    c.beginPath();
-    c.moveTo(-s * 0.15, -s * 0.18);
-    c.lineTo(-s * 0.17, s * 0.2);
-    c.lineTo(s * 0.17, s * 0.2);
-    c.lineTo(s * 0.15, -s * 0.18);
-    c.quadraticCurveTo(0, -s * 0.22, -s * 0.15, -s * 0.18);
-    c.closePath();
-    c.fill();
-    // shirt
-    c.fillStyle = '#ffffff';
-    c.beginPath();
-    c.moveTo(-s * 0.06, -s * 0.19);
-    c.lineTo(0, s * 0.02);
-    c.lineTo(s * 0.06, -s * 0.19);
-    c.closePath();
-    c.fill();
-    // bow tie
-    c.fillStyle = '#1f1a1c';
-    c.beginPath();
-    c.moveTo(0, -s * 0.15);
-    c.lineTo(-s * 0.05, -s * 0.18);
-    c.lineTo(-s * 0.05, -s * 0.12);
-    c.closePath();
-    c.moveTo(0, -s * 0.15);
-    c.lineTo(s * 0.05, -s * 0.18);
-    c.lineTo(s * 0.05, -s * 0.12);
-    c.closePath();
-    c.fill();
-    // boutonniere
-    c.fillStyle = COLORS.rose;
-    c.beginPath();
-    c.arc(-s * 0.1, -s * 0.1, s * 0.03, 0, Math.PI * 2);
-    c.fill();
-    // head
-    c.fillStyle = '#e8b896';
-    c.beginPath();
-    c.arc(0, -s * 0.3, s * 0.12, 0, Math.PI * 2);
-    c.fill();
-    c.fillStyle = '#3b2a24';
-    c.beginPath();
-    c.arc(0, -s * 0.33, s * 0.125, Math.PI * 1.0, Math.PI * 2);
-    c.fill();
-    // kippah
-    c.fillStyle = '#ffffff';
-    c.beginPath();
-    c.ellipse(0, -s * 0.44, s * 0.07, s * 0.03, 0, 0, Math.PI * 2);
-    c.fill();
-    eyes(c, 0, -s * 0.29, s);
-    cheeks(c, 0, -s * 0.29, s);
-    c.restore();
-  }
-
-  function drawChuppah(c, x, y, t) {
-    const w = T * 0.62;
-    const top = y - T * 0.78;
-    c.save();
-    // glow
-    const g = c.createRadialGradient(x, y, 2, x, y, T * 1.2);
-    g.addColorStop(0, 'rgba(255, 236, 200, 0.75)');
-    g.addColorStop(1, 'rgba(255, 236, 200, 0)');
-    c.fillStyle = g;
-    c.beginPath();
-    c.arc(x, y, T * 1.2, 0, Math.PI * 2);
-    c.fill();
-    // poles
-    c.fillStyle = COLORS.gold;
-    c.fillRect(x - w - 1.5, top, 3, T * 1.2);
-    c.fillRect(x + w - 1.5, top, 3, T * 1.2);
-    // canopy
-    c.fillStyle = '#ffffff';
-    c.strokeStyle = COLORS.goldLight;
-    c.lineWidth = 1.2;
-    c.beginPath();
-    c.moveTo(x - w - 4, top);
-    c.quadraticCurveTo(x, top - T * 0.22, x + w + 4, top);
-    const scallops = 5;
-    for (let i = scallops; i > 0; i--) {
-      const x0 = x - w - 4 + ((i) / scallops) * (2 * w + 8);
-      const x1 = x - w - 4 + ((i - 1) / scallops) * (2 * w + 8);
-      c.quadraticCurveTo((x0 + x1) / 2, top + T * 0.16, x1, top);
-    }
-    c.closePath();
-    c.fill();
-    c.stroke();
-    // flowers on corners
-    [[x - w, top], [x + w, top], [x, top - T * 0.1]].forEach(([fx, fy], i) => {
-      flower(c, fx, fy, T * 0.11, i === 2 ? COLORS.rose : '#f4b6c2', t + i);
-    });
-    c.restore();
-  }
-
   function flower(c, x, y, r, color, t = 0) {
     c.fillStyle = color;
     for (let i = 0; i < 5; i++) {
@@ -862,12 +671,253 @@
     c.fill();
   }
 
+  function drawWoman(c, x, y, look, { bob = 0, lean = 0, alpha = 1 } = {}) {
+    const s = T * 1.05;
+    c.save();
+    c.globalAlpha = alpha;
+    c.translate(x, y + bob);
+    shadow(c, 0, s * 0.4, s * 0.3);
+    c.rotate(lean);
+    if (look.head === 'veil') {
+      c.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      c.strokeStyle = 'rgba(220, 200, 205, 0.8)';
+      c.lineWidth = 0.8;
+      c.beginPath();
+      c.moveTo(-s * 0.12, -s * 0.36);
+      c.quadraticCurveTo(-s * 0.36, -s * 0.05, -s * 0.3, s * 0.22);
+      c.lineTo(s * 0.3, s * 0.22);
+      c.quadraticCurveTo(s * 0.36, -s * 0.05, s * 0.12, -s * 0.36);
+      c.closePath();
+      c.fill();
+      c.stroke();
+    } else {
+      // long hair flowing behind the shoulders
+      c.fillStyle = look.hair;
+      c.beginPath();
+      c.moveTo(-s * 0.13, -s * 0.34);
+      c.quadraticCurveTo(-s * 0.22, -s * 0.12, -s * 0.16, -s * 0.02);
+      c.lineTo(s * 0.16, -s * 0.02);
+      c.quadraticCurveTo(s * 0.22, -s * 0.12, s * 0.13, -s * 0.34);
+      c.closePath();
+      c.fill();
+    }
+    // dress
+    c.fillStyle = look.dress;
+    c.strokeStyle = '#e6d2d6';
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(-s * 0.1, -s * 0.1);
+    c.quadraticCurveTo(-s * 0.16, s * 0.15, -s * 0.34, s * 0.4);
+    c.quadraticCurveTo(0, s * 0.48, s * 0.34, s * 0.4);
+    c.quadraticCurveTo(s * 0.16, s * 0.15, s * 0.1, -s * 0.1);
+    c.closePath();
+    c.fill();
+    c.stroke();
+    roundRect(c, -s * 0.1, -s * 0.2, s * 0.2, s * 0.13, s * 0.04);
+    c.fill();
+    c.stroke();
+    c.fillStyle = COLORS.goldLight;
+    c.fillRect(-s * 0.105, -s * 0.09, s * 0.21, s * 0.03);
+    // bouquet
+    c.fillStyle = '#9fbf95';
+    c.beginPath();
+    c.moveTo(-s * 0.02, s * 0.02);
+    c.lineTo(s * 0.02, s * 0.14);
+    c.lineTo(s * 0.06, s * 0.02);
+    c.fill();
+    [[-0.04, -0.01, 0], [0.04, -0.02, 1], [0, -0.05, 2], [0.08, 0.02, 1]].forEach(([bx, by, ci]) => {
+      c.fillStyle = look.flowers[ci];
+      c.beginPath();
+      c.arc(s * bx, s * by, s * 0.04, 0, Math.PI * 2);
+      c.fill();
+    });
+    // head
+    c.fillStyle = look.skin;
+    c.beginPath();
+    c.arc(0, -s * 0.3, s * 0.12, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = look.hair;
+    c.beginPath();
+    c.arc(0, -s * 0.33, s * 0.125, Math.PI * 1.02, Math.PI * 1.98);
+    c.fill();
+    if (look.head === 'veil') {
+      c.beginPath();
+      c.arc(0, -s * 0.44, s * 0.06, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = COLORS.gold;
+      c.beginPath();
+      c.moveTo(-s * 0.08, -s * 0.41);
+      c.lineTo(-s * 0.04, -s * 0.47);
+      c.lineTo(0, -s * 0.42);
+      c.lineTo(s * 0.04, -s * 0.47);
+      c.lineTo(s * 0.08, -s * 0.41);
+      c.closePath();
+      c.fill();
+    } else {
+      // flower crown
+      for (let i = 0; i < 5; i++) {
+        const a = Math.PI * (1.1 + i * 0.2);
+        c.fillStyle = look.flowers[i % look.flowers.length];
+        c.beginPath();
+        c.arc(Math.cos(a) * s * 0.12, -s * 0.33 + Math.sin(a) * s * 0.1, s * 0.035, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+    eyes(c, 0, -s * 0.29, s);
+    cheeks(c, 0, -s * 0.29, s);
+    c.restore();
+  }
+
+  function drawMan(c, x, y, look, { bob = 0, lean = 0, alpha = 1 } = {}) {
+    const s = T * 1.05;
+    c.save();
+    c.globalAlpha = alpha;
+    c.translate(x, y + bob);
+    shadow(c, 0, s * 0.4, s * 0.24);
+    c.rotate(lean);
+    c.fillStyle = look.trousers;
+    c.fillRect(-s * 0.1, s * 0.15, s * 0.08, s * 0.25);
+    c.fillRect(s * 0.02, s * 0.15, s * 0.08, s * 0.25);
+    c.fillStyle = look.suit;
+    c.strokeStyle = 'rgba(60, 40, 50, 0.25)';
+    c.lineWidth = 0.8;
+    c.beginPath();
+    c.moveTo(-s * 0.15, -s * 0.18);
+    c.lineTo(-s * 0.17, s * 0.2);
+    c.lineTo(s * 0.17, s * 0.2);
+    c.lineTo(s * 0.15, -s * 0.18);
+    c.quadraticCurveTo(0, -s * 0.22, -s * 0.15, -s * 0.18);
+    c.closePath();
+    c.fill();
+    c.stroke();
+    c.fillStyle = '#ffffff';
+    c.beginPath();
+    c.moveTo(-s * 0.06, -s * 0.19);
+    c.lineTo(0, s * 0.02);
+    c.lineTo(s * 0.06, -s * 0.19);
+    c.closePath();
+    c.fill();
+    c.stroke();
+    c.fillStyle = look.tie;
+    c.beginPath();
+    c.moveTo(0, -s * 0.15);
+    c.lineTo(-s * 0.05, -s * 0.18);
+    c.lineTo(-s * 0.05, -s * 0.12);
+    c.closePath();
+    c.moveTo(0, -s * 0.15);
+    c.lineTo(s * 0.05, -s * 0.18);
+    c.lineTo(s * 0.05, -s * 0.12);
+    c.closePath();
+    c.fill();
+    c.fillStyle = look.flower;
+    c.beginPath();
+    c.arc(-s * 0.1, -s * 0.1, s * 0.03, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = look.skin;
+    c.beginPath();
+    c.arc(0, -s * 0.3, s * 0.12, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = look.hair;
+    c.beginPath();
+    c.arc(0, -s * 0.33, s * 0.125, Math.PI * 1.0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = '#ffffff';
+    c.beginPath();
+    c.ellipse(0, -s * 0.44, s * 0.07, s * 0.03, 0, 0, Math.PI * 2);
+    c.fill();
+    eyes(c, 0, -s * 0.29, s);
+    cheeks(c, 0, -s * 0.29, s);
+    c.restore();
+  }
+
+  function drawPerson(c, x, y, look, opts) {
+    if (look.type === 'woman') drawWoman(c, x, y, look, opts);
+    else drawMan(c, x, y, look, opts);
+  }
+
+  function drawTag(c, x, y, text, color) {
+    c.save();
+    c.font = `bold ${Math.round(T * 0.3)}px Georgia, serif`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    const w = c.measureText(text).width + T * 0.25;
+    c.fillStyle = color;
+    roundRect(c, x - w / 2, y - T * 0.2, w, T * 0.4, T * 0.2);
+    c.fill();
+    c.fillStyle = '#ffffff';
+    c.fillText(text, x, y + 0.5);
+    c.restore();
+  }
+
+  function drawRingItem(c, x, y, r, spin) {
+    const rx = r * Math.max(0.25, Math.abs(Math.cos(spin)));
+    c.save();
+    c.translate(x, y);
+    c.lineWidth = T * 0.075;
+    c.strokeStyle = COLORS.gold;
+    c.beginPath();
+    c.ellipse(0, 0, rx, r, 0, 0, Math.PI * 2);
+    c.stroke();
+    c.lineWidth = T * 0.025;
+    c.strokeStyle = '#f6e3b0';
+    c.beginPath();
+    c.ellipse(0, 0, rx, r, 0, Math.PI * 1.1, Math.PI * 1.6);
+    c.stroke();
+    c.translate(0, -r - T * 0.06);
+    c.rotate(Math.PI / 4);
+    const d = T * 0.14;
+    c.fillStyle = '#d7eef8';
+    c.fillRect(-d / 2, -d / 2, d, d);
+    c.fillStyle = '#ffffff';
+    c.fillRect(-d / 2, -d / 2, d / 2.4, d / 2.4);
+    c.restore();
+  }
+
+  function drawChuppah(c, x, y, t) {
+    const w = T * 1.15;
+    const top = y - T * 1.25;
+    c.save();
+    const g = c.createRadialGradient(x, y, 2, x, y, T * 1.8);
+    g.addColorStop(0, 'rgba(255, 236, 200, 0.8)');
+    g.addColorStop(1, 'rgba(255, 236, 200, 0)');
+    c.fillStyle = g;
+    c.beginPath();
+    c.arc(x, y, T * 1.8, 0, Math.PI * 2);
+    c.fill();
+    // poles
+    c.fillStyle = COLORS.gold;
+    c.fillRect(x - w - 1.5, top, 3, T * 1.95);
+    c.fillRect(x + w - 1.5, top, 3, T * 1.95);
+    // draped fabric
+    c.fillStyle = '#ffffff';
+    c.strokeStyle = COLORS.goldLight;
+    c.lineWidth = 1.4;
+    c.beginPath();
+    c.moveTo(x - w - 5, top);
+    c.quadraticCurveTo(x, top - T * 0.38, x + w + 5, top);
+    const scallops = 7;
+    for (let i = scallops; i > 0; i--) {
+      const x0 = x - w - 5 + (i / scallops) * (2 * w + 10);
+      const x1 = x - w - 5 + ((i - 1) / scallops) * (2 * w + 10);
+      c.quadraticCurveTo((x0 + x1) / 2, top + T * 0.22, x1, top);
+    }
+    c.closePath();
+    c.fill();
+    c.stroke();
+    // garland
+    [[x - w, top], [x + w, top], [x, top - T * 0.18], [x - w * 0.5, top - T * 0.12], [x + w * 0.5, top - T * 0.12]]
+      .forEach(([fx, fy], i) => flower(c, fx, fy, T * 0.13, i % 2 ? '#f4b6c2' : COLORS.rose, t + i));
+    c.restore();
+  }
+
   // ---------------------------------------------------------------------------
   // Game state
   // ---------------------------------------------------------------------------
   const game = {
     mode: 'menu',       // menu | play | paused | dying | kiss | won | lost
     prevMode: null,
+    couple: 'mw',
+    playMode: 'single', // single | coop
     level: 1,
     lives: MAX_LIVES,
     score: 0,
@@ -876,21 +926,25 @@
     heartsGot: 0,
     heartsTotal: 0,
     maze: null,
-    start: null,
-    goal: null,
-    player: null,
-    groom: null,
+    chars: [],
+    chuppah: null,
+    ring: null,
+    hasRing: false,
     hearts: [],
     obstacles: [],
     shake: 0,
     stateT: 0,
     kiss: null,
+    toastT: 0,
     best: loadBest(),
     clock: 0
   };
 
-  const view = { scale: 1, cssSize: 0, dpr: 1 };
-  const input = { up: false, down: false, left: false, right: false };
+  const view = { scale: 1, dpr: 1 };
+  const input = {
+    p1: { up: false, down: false, left: false, right: false },  // WASD (+ touch D-pad)
+    p2: { up: false, down: false, left: false, right: false }   // Arrow keys
+  };
 
   function loadBest() {
     try { return parseInt(localStorage.getItem(BEST_KEY), 10) || 0; } catch (e) { return 0; }
@@ -903,34 +957,74 @@
     }
   }
 
-  function difficulty(level) {
-    return 1 + (level - 1) * 0.12;
+  function loadSetup() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SETUP_KEY) || '{}');
+      if (COUPLES[s.couple]) game.couple = s.couple;
+      if (s.playMode === 'single' || s.playMode === 'coop') game.playMode = s.playMode;
+    } catch (e) { /* ignore */ }
+  }
+
+  function saveSetup() {
+    try {
+      localStorage.setItem(SETUP_KEY, JSON.stringify({ couple: game.couple, playMode: game.playMode }));
+    } catch (e) { /* ignore */ }
+  }
+
+  const difficulty = (level) => 1 + (level - 1) * 0.12;
+  // Always odd so the maze has a true centre cell for the chuppah.
+  const cellsFor = (level) => Math.min(7 + 2 * Math.floor((level - 1) / 2), 15);
+  const isCoop = () => game.playMode === 'coop';
+  const controlledChars = () => (isCoop() ? game.chars : game.chars.slice(0, 1));
+
+  function makeChar(tx, ty, look, index) {
+    return {
+      index,
+      look,
+      x: center(tx),
+      y: center(ty),
+      r: T * 0.3,
+      speed: T * 4.6,
+      moving: false,
+      walk: rand(0, 3),
+      invuln: 1.2,
+      shield: 0,
+      path: null,
+      pathIdx: 0
+    };
   }
 
   function buildLevel(level) {
-    const n = Math.min(6 + level, 15);
+    const n = cellsFor(level);
     const maze = generateMaze(n);
-    const { size } = maze;
+    const { size, mid } = maze;
     game.maze = maze;
-    game.start = { x: 1, y: 1 };
-    game.goal = { x: size - 2, y: size - 2 };
     game.time = 0;
     game.heartsGot = 0;
+    game.hasRing = false;
     game.shake = 0;
     game.kiss = null;
     particles = [];
 
+    const startA = { x: 1, y: 1 };
+    const startB = { x: size - 2, y: size - 2 };
+    const centreTile = { x: mid, y: mid };
+    game.chuppah = { x: center(mid), y: center(mid) };
+
     const diff = difficulty(level);
-    const dS = bfs(maze, game.start);
-    const dG = bfs(maze, game.goal);
+    const sA = bfs(maze, startA);
+    const sB = bfs(maze, startB);
+    const sC = bfs(maze, centreTile);
     const floor = [];
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        if (!maze.isWall(x, y)) floor.push({ x, y, ds: dS[y * size + x], dg: dG[y * size + x] });
+        if (maze.isWall(x, y) || maze.inPlaza(x, y)) continue;
+        const i = y * size + x;
+        floor.push({ x, y, da: sA.d[i], db: sB.d[i], dc: sC.d[i] });
       }
     }
 
-    // Decorative flowers on walls (fixed per level)
+    // Decorative flowers on walls
     maze.decor = [];
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
@@ -940,17 +1034,25 @@
       }
     }
 
+    // The one wedding ring: somewhere far from both starts and the chuppah.
+    const ringCands = floor
+      .map((f) => ({ ...f, score: Math.min(f.da, f.db, f.dc * 1.5) }))
+      .sort((a, b) => b.score - a.score);
+    const ringTile = pick(ringCands.slice(0, Math.max(1, Math.floor(ringCands.length * 0.25))));
+    game.ring = { x: center(ringTile.x), y: center(ringTile.y), tx: ringTile.x, ty: ringTile.y, spin: 0, got: false };
+
     // Collectible hearts
     const heartCount = Math.min(4 + level, 12);
-    game.hearts = shuffle(floor.filter((f) => f.ds > 3 && f.dg > 1))
+    game.hearts = shuffle(floor.filter((f) => f.da > 3 && f.db > 3 && !(f.x === ringTile.x && f.y === ringTile.y)))
       .slice(0, heartCount)
       .map((f) => ({ x: center(f.x), y: center(f.y), phase: rand(0, 6), got: false }));
     game.heartsTotal = game.hearts.length;
 
-    // Obstacles
-    const count = Math.min(3 + level * 2, 22);
-    const types = ['guest', 'ring', 'clock', 'cork'];
-    const cands = shuffle(floor.filter((f) => f.ds >= 7 && f.dg >= 2));
+    // Hazards
+    const count = Math.min(2 + level * 2, 20);
+    const types = ['guest', 'clock', 'cork'];
+    const cands = shuffle(floor.filter((f) => f.da >= 6 && f.db >= 6 && f.dc >= 3 &&
+      !(f.x === ringTile.x && f.y === ringTile.y)));
     const used = [];
     const farEnough = (f) => used.every((u) => Math.abs(u.x - f.x) + Math.abs(u.y - f.y) >= 3);
     game.obstacles = [];
@@ -960,12 +1062,7 @@
       let made = null;
       for (const f of cands) {
         if (!farEnough(f)) continue;
-        if (type === 'ring') {
-          const h = runLength(maze, f.x, f.y, 1, 0) + runLength(maze, f.x, f.y, -1, 0);
-          const v = runLength(maze, f.x, f.y, 0, 1) + runLength(maze, f.x, f.y, 0, -1);
-          if (Math.max(h, v) < 3) continue;
-          made = new Ring(f.x, f.y, h >= v ? 'h' : 'v', diff);
-        } else if (type === 'cork') {
+        if (type === 'cork') {
           const dirs = DIRS.filter(([dx, dy]) => maze.isWall(f.x - dx, f.y - dy) && runLength(maze, f.x, f.y, dx, dy) >= 3);
           if (!dirs.length) continue;
           made = new Cork(f.x, f.y, pick(dirs), diff);
@@ -978,7 +1075,7 @@
         break;
       }
       if (!made) {
-        const f = cands.find(farEnough) || cands[i % cands.length];
+        const f = cands.find(farEnough);
         if (!f) break;
         used.push(f);
         made = new Guest(f.x, f.y, diff);
@@ -986,19 +1083,23 @@
       game.obstacles.push(made);
     }
 
-    game.player = {
-      x: center(game.start.x),
-      y: center(game.start.y),
-      r: T * 0.3,
-      speed: T * 4.6,
-      moving: false,
-      walk: 0,
-      invuln: 1.2
-    };
-    game.groom = { x: center(game.goal.x), y: center(game.goal.y) };
+    // The couple: opposite corners, both heading for the centre.
+    const couple = COUPLES[game.couple];
+    const a = makeChar(startA.x, startA.y, couple.a, 0);
+    const b = makeChar(startB.x, startB.y, couple.b, 1);
+    // In single player the partner walks to the chuppah on their own.
+    b.path = pathTo(maze, sC, startB).reverse();
+    b.pathIdx = 0;
+    game.chars = [a, b];
 
     resize();
     updateHud(true);
+  }
+
+  function applyCoupleLooks() {
+    const couple = COUPLES[game.couple];
+    if (game.chars[0]) game.chars[0].look = couple.a;
+    if (game.chars[1]) game.chars[1].look = couple.b;
   }
 
   // ---------------------------------------------------------------------------
@@ -1009,7 +1110,6 @@
     const rect = stage.getBoundingClientRect();
     const cssSize = Math.max(200, Math.floor(Math.min(rect.width, rect.height) - 14));
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    view.cssSize = cssSize;
     view.dpr = dpr;
     canvas.style.width = `${cssSize}px`;
     canvas.style.height = `${cssSize}px`;
@@ -1027,7 +1127,6 @@
     const c = mazeLayer.getContext('2d');
     c.setTransform(view.scale, 0, 0, view.scale, 0, 0);
 
-    // floor
     c.fillStyle = COLORS.floorA;
     c.fillRect(0, 0, size * T, size * T);
     for (let y = 0; y < size; y++) {
@@ -1037,7 +1136,6 @@
           c.fillStyle = COLORS.floorB;
           c.fillRect(x * T, y * T, T, T);
         }
-        // soft shadow under walls
         if (m.isWall(x, y - 1)) {
           const g = c.createLinearGradient(0, y * T, 0, y * T + T * 0.3);
           g.addColorStop(0, 'rgba(180, 86, 107, 0.16)');
@@ -1048,12 +1146,26 @@
       }
     }
 
-    // aisle runner hint at the start
-    c.fillStyle = 'rgba(216, 121, 140, 0.12)';
-    heartPath(c, center(game.start.x), center(game.start.y) + 2, T * 0.8);
+    // plaza rug under the chuppah
+    const mx = center(m.mid);
+    c.fillStyle = 'rgba(244, 182, 194, 0.28)';
+    roundRect(c, mx - T * 1.4, mx - T * 1.4, T * 2.8, T * 2.8, T * 0.6);
+    c.fill();
+    c.strokeStyle = 'rgba(201, 162, 75, 0.55)';
+    c.lineWidth = 1.2;
+    c.setLineDash([3, 3]);
+    roundRect(c, mx - T * 1.3, mx - T * 1.3, T * 2.6, T * 2.6, T * 0.5);
+    c.stroke();
+    c.setLineDash([]);
+
+    // start markers in the two corners
+    c.fillStyle = 'rgba(216, 121, 140, 0.14)';
+    heartPath(c, center(1), center(1) + 2, T * 0.8);
+    c.fill();
+    c.fillStyle = 'rgba(111, 159, 184, 0.14)';
+    heartPath(c, center(size - 2), center(size - 2) + 2, T * 0.8);
     c.fill();
 
-    // walls: top face + darker front face for a soft 2.5D look
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         if (!m.isWall(x, y)) continue;
@@ -1066,7 +1178,6 @@
       }
     }
 
-    // gold trim where walls meet the floor
     c.strokeStyle = COLORS.gold;
     c.lineWidth = 1.1;
     c.beginPath();
@@ -1083,19 +1194,17 @@
     }
     c.stroke();
 
-    // little flowers on hedges
     for (const d of m.decor) {
       flower(c, center(d.x) + d.ox * T, center(d.y) + d.oy * T, T * 0.14, d.c);
     }
 
-    // outer frame
     c.strokeStyle = COLORS.goldLight;
     c.lineWidth = 3;
     c.strokeRect(1.5, 1.5, size * T - 3, size * T - 3);
   }
 
   // ---------------------------------------------------------------------------
-  // Player movement & collision
+  // Movement & collision
   // ---------------------------------------------------------------------------
   function resolveWalls(p) {
     const m = game.maze;
@@ -1134,8 +1243,8 @@
     }
   }
 
-  // When moving along one axis, gently slide the player into the nearest open
-  // lane on the other axis — makes turning into corridors feel smooth.
+  // When moving along one axis, gently slide into the nearest open lane on the
+  // other axis — makes turning into corridors feel smooth.
   function laneTarget(p, horizontal, sign) {
     const m = game.maze;
     const tx = Math.floor(p.x / T);
@@ -1157,91 +1266,182 @@
     return best;
   }
 
-  function updatePlayer(dt) {
-    const p = game.player;
-    let ix = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-    let iy = (input.down ? 1 : 0) - (input.up ? 1 : 0);
-    p.moving = ix !== 0 || iy !== 0;
-    if (p.moving) p.walk += dt * 14;
+  function inputFor(ch) {
+    if (isCoop()) return ch.index === 0 ? input.p1 : input.p2;
+    const a = input.p1;
+    const b = input.p2;
+    return { up: a.up || b.up, down: a.down || b.down, left: a.left || b.left, right: a.right || b.right };
+  }
+
+  function updateControlled(ch, dt) {
+    const k = inputFor(ch);
+    let ix = (k.right ? 1 : 0) - (k.left ? 1 : 0);
+    let iy = (k.down ? 1 : 0) - (k.up ? 1 : 0);
+    ch.moving = ix !== 0 || iy !== 0;
+    if (ch.moving) ch.walk += dt * 14;
     if (ix && iy) {
       ix *= Math.SQRT1_2;
       iy *= Math.SQRT1_2;
     }
-    const step = p.speed * dt;
+    const step = ch.speed * dt;
     if (ix && !iy) {
-      const lane = laneTarget(p, true, Math.sign(ix));
-      if (lane !== null) p.y += clamp(lane - p.y, -step * 0.8, step * 0.8);
+      const lane = laneTarget(ch, true, Math.sign(ix));
+      if (lane !== null) ch.y += clamp(lane - ch.y, -step * 0.8, step * 0.8);
     } else if (iy && !ix) {
-      const lane = laneTarget(p, false, Math.sign(iy));
-      if (lane !== null) p.x += clamp(lane - p.x, -step * 0.8, step * 0.8);
+      const lane = laneTarget(ch, false, Math.sign(iy));
+      if (lane !== null) ch.x += clamp(lane - ch.x, -step * 0.8, step * 0.8);
     }
     if (ix) {
-      p.x += ix * step;
-      resolveWalls(p);
+      ch.x += ix * step;
+      resolveWalls(ch);
     }
     if (iy) {
-      p.y += iy * step;
-      resolveWalls(p);
+      ch.y += iy * step;
+      resolveWalls(ch);
     }
-    if (p.invuln > 0) p.invuln -= dt;
   }
+
+  // Single-player partner: follows the shortest path to the chuppah.
+  function updatePartner(ch, dt) {
+    const leader = game.chars[0];
+    const hurry = game.hasRing && atChuppah(leader) ? 2.2 : 1;
+    const speed = T * 2.4 * hurry;
+    ch.moving = false;
+    if (!ch.path || ch.pathIdx >= ch.path.length) return;
+    const target = ch.path[ch.pathIdx];
+    let tx = center(target.x);
+    let ty = center(target.y);
+    if (ch.pathIdx === ch.path.length - 1) {
+      // stand beside the centre, leaving room for the other partner
+      tx = game.chuppah.x + T * 0.4;
+      ty = game.chuppah.y;
+    }
+    const dx = tx - ch.x;
+    const dy = ty - ch.y;
+    const d = Math.hypot(dx, dy);
+    const step = speed * dt;
+    if (d <= step) {
+      ch.x = tx;
+      ch.y = ty;
+      ch.pathIdx++;
+    } else {
+      ch.x += (dx / d) * step;
+      ch.y += (dy / d) * step;
+      ch.moving = true;
+      ch.walk += dt * 12;
+    }
+  }
+
+  const atChuppah = (ch) => dist(ch, game.chuppah) < T * 1.05;
+  const inSafeZone = (ch) => game.maze.inPlaza(Math.floor(ch.x / T), Math.floor(ch.y / T));
 
   // ---------------------------------------------------------------------------
   // Game flow
   // ---------------------------------------------------------------------------
-  function hurt() {
-    const p = game.player;
+  function toast(text, seconds = 2.2) {
+    if (toastEl.textContent !== text) toastEl.textContent = text;
+    toastEl.classList.add('show');
+    game.toastT = seconds;
+  }
+
+  function hideToast() {
+    toastEl.classList.remove('show');
+    game.toastT = 0;
+  }
+
+  function hurt(ch) {
     game.lives--;
-    p.invuln = 1.8;
+    for (const c of controlledChars()) c.invuln = Math.max(c.invuln, 0.6);
+    ch.invuln = 1.8;
     game.shake = 0.35;
-    burst(p.x, p.y - T * 0.2, 14, 'heart', ['#c9b6ba', COLORS.rose], 1.2);
+    burst(ch.x, ch.y - T * 0.2, 14, 'heart', ['#c9b6ba', COLORS.rose], 1.2);
     Sound.hit();
     if (game.lives <= 0) {
       game.mode = 'dying';
       game.stateT = 0;
+      hideToast();
       Sound.lose();
     }
     updateHud();
   }
 
+  function collectRing(ch) {
+    const r = game.ring;
+    r.got = true;
+    game.hasRing = true;
+    game.score += RING_BONUS;
+    for (const c of controlledChars()) {
+      c.shield = 3;
+      c.invuln = Math.max(c.invuln, 3);
+    }
+    burst(r.x, r.y, 24, 'spark', [COLORS.gold, COLORS.goldLight, '#ffffff'], 1.4);
+    burst(r.x, r.y, 10, 'heart', [COLORS.rose, '#f4b6c2'], 0.9);
+    Sound.ring();
+    const who = isCoop() ? `Player ${ch.index + 1}` : 'You';
+    toast(`💍 ${who} found the wedding ring! +${RING_BONUS} · shield on — now to the chuppah!`, 3);
+    updateHud(true);
+  }
+
+  function checkMeeting() {
+    const [a, b] = game.chars;
+    const aIn = atChuppah(a);
+    const bIn = atChuppah(b);
+    const someoneIn = isCoop() ? aIn || bIn : aIn;
+    if (!someoneIn) return;
+    if (!game.hasRing) {
+      toast('💍 Find the wedding ring first — the kiss needs a ring!', 0.6);
+      return;
+    }
+    if (aIn && bIn) {
+      hideToast();
+      startKiss();
+      return;
+    }
+    const names = COUPLES[game.couple].names;
+    if (isCoop()) toast(`Waiting for Player ${aIn ? 2 : 1} under the chuppah…`, 0.6);
+    else toast(`Waiting for ${names[1]}…`, 0.6);
+  }
+
   function startKiss() {
-    const p = game.player;
     game.mode = 'kiss';
     game.stateT = 0;
+    const cx = game.chuppah.x;
+    const cy = game.chuppah.y;
     game.kiss = {
-      fromX: p.x,
-      fromY: p.y,
-      toX: game.groom.x - T * 0.32,
-      toY: game.groom.y,
+      from: game.chars.map((c) => ({ x: c.x, y: c.y })),
+      to: [{ x: cx - T * 0.3, y: cy }, { x: cx + T * 0.3, y: cy }],
       popped: false
     };
   }
 
   function updateKiss(dt) {
     const k = game.kiss;
-    const p = game.player;
     const t = (game.stateT += dt);
     const a = easeInOut(Math.min(1, t / 0.6));
-    p.x = lerp(k.fromX, k.toX, a);
-    p.y = lerp(k.fromY, k.toY, a);
-    p.moving = t < 0.6;
-    if (p.moving) p.walk += dt * 14;
+    game.chars.forEach((c, i) => {
+      c.x = lerp(k.from[i].x, k.to[i].x, a);
+      c.y = lerp(k.from[i].y, k.to[i].y, a);
+      c.moving = t < 0.6;
+      if (c.moving) c.walk += dt * 14;
+    });
+    const cx = game.chuppah.x;
+    const cy = game.chuppah.y;
     if (t > 0.85 && !k.popped) {
       k.popped = true;
       Sound.win();
-      burst(game.groom.x - T * 0.16, game.groom.y - T * 0.5, 30, 'heart', [COLORS.rose, '#f4b6c2', '#ffffff'], 1.4);
-      burst(game.groom.x, game.groom.y, 60, 'confetti', COLORS.confetti, 1.6);
-      confettiRain(120);
+      burst(cx, cy - T * 0.5, 30, 'heart', [COLORS.rose, '#f4b6c2', '#ffffff'], 1.4);
+      burst(cx, cy, 60, 'confetti', COLORS.confetti, 1.6);
+      confettiRain(140);
     }
     if (k.popped && Math.random() < 0.25) {
-      burst(game.groom.x - T * 0.16 + rand(-8, 8), game.groom.y - T * 0.55, 1, 'heart', [COLORS.rose, '#f4b6c2'], 0.5);
+      burst(cx + rand(-8, 8), cy - T * 0.55, 1, 'heart', [COLORS.rose, '#f4b6c2'], 0.5);
     }
     if (t >= 3.0) finishLevel();
   }
 
   function finishLevel() {
     game.mode = 'won';
-    const n = Math.min(6 + game.level, 15);
+    const n = cellsFor(game.level);
     const par = 15 + n * n * 0.25;
     const timeBonus = Math.max(0, Math.round((par - game.time) * 10));
     const livesBonus = game.lives * 150;
@@ -1250,6 +1450,7 @@
     game.score += timeBonus + livesBonus + levelBonus;
     saveBest();
     $('winStats').innerHTML = `
+      <dt>Wedding ring</dt><dd>Found (+${RING_BONUS})</dd>
       <dt>Hearts collected</dt><dd>${game.heartsGot} / ${game.heartsTotal} (+${heartPts})</dd>
       <dt>Time</dt><dd>${fmtTime(game.time)}</dd>
       <dt>Time bonus</dt><dd>+${timeBonus}</dd>
@@ -1266,6 +1467,7 @@
     saveBest();
     $('loseStats').innerHTML = `
       <dt>Level reached</dt><dd>${game.level}</dd>
+      <dt>Wedding ring</dt><dd>${game.hasRing ? 'Found' : 'Not found'}</dd>
       <dt>Hearts collected</dt><dd>${game.heartsGot} / ${game.heartsTotal}</dd>
       <dt>Time</dt><dd>${fmtTime(game.time)}</dd>
       <dt class="total">Score</dt><dd class="total">${game.score}</dd>
@@ -1276,6 +1478,7 @@
   function newGame() {
     Sound.init();
     Sound.start();
+    saveSetup();
     game.level = 1;
     game.lives = MAX_LIVES;
     game.score = 0;
@@ -1307,6 +1510,7 @@
     game.level = 1;
     game.score = 0;
     game.lives = MAX_LIVES;
+    hideToast();
     buildLevel(1);
     showBest();
     showScreen('start');
@@ -1316,6 +1520,9 @@
     clearInput();
     hideScreens();
     game.mode = 'play';
+    const names = COUPLES[game.couple].names;
+    if (isCoop()) toast('P1 (WASD) & P2 (Arrows): find the 💍 ring, then meet at the centre!', 3.5);
+    else toast(`Guide ${names[0]} to the 💍 ring, then to the chuppah at the centre!`, 3.5);
   }
 
   function togglePause() {
@@ -1323,6 +1530,9 @@
       game.prevMode = game.mode;
       game.mode = 'paused';
       clearInput();
+      $('pauseControls').textContent = isCoop()
+        ? 'Player 1: W A S D · Player 2: Arrow keys'
+        : 'Move with W A S D or the Arrow keys';
       showScreen('pause');
     } else if (game.mode === 'paused') {
       hideScreens();
@@ -1346,6 +1556,83 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Setup screens
+  // ---------------------------------------------------------------------------
+  function drawPreviews() {
+    document.querySelectorAll('canvas.preview').forEach((cv) => {
+      const couple = COUPLES[cv.dataset.couple];
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = 150;
+      const h = 100;
+      cv.width = w * dpr;
+      cv.height = h * dpr;
+      const c = cv.getContext('2d');
+      const k = (h / (T * 1.7)) * dpr;
+      c.setTransform(k, 0, 0, k, 0, 0);
+      const W = (w * dpr) / k;
+      const cy = T * 0.95;
+      c.fillStyle = 'rgba(244, 182, 194, 0.5)';
+      heartPath(c, W / 2, cy - T * 0.68, T * 0.42);
+      c.fill();
+      drawPerson(c, W / 2 - T * 0.33, cy, couple.a, { lean: 0.12 });
+      drawPerson(c, W / 2 + T * 0.33, cy, couple.b, { lean: -0.12 });
+    });
+  }
+
+  function syncSetupUI() {
+    document.querySelectorAll('.option[data-couple]').forEach((b) =>
+      b.setAttribute('aria-checked', String(b.dataset.couple === game.couple)));
+    document.querySelectorAll('.option[data-mode]').forEach((b) =>
+      b.setAttribute('aria-checked', String(b.dataset.mode === game.playMode)));
+
+    const names = COUPLES[game.couple].names;
+    $('descSingle').textContent =
+      `You guide ${names[0]}; ${names[1]} makes their own way to the chuppah.`;
+
+    const wasd = '<div class="keys"><kbd class="top">W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div>';
+    const arrows = '<div class="keys"><kbd class="top">↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd></div>';
+    $('controlsGuide').innerHTML = isCoop()
+      ? `<div class="guide-col"><span class="badge p1">Player 1</span>${wasd}
+           <span>WASD keys · controls ${names[0]} (top-left corner)</span></div>
+         <div class="guide-col"><span class="badge p2">Player 2</span>${arrows}
+           <span>Arrow keys · controls ${names[1]} (bottom-right corner)</span></div>`
+      : `<div class="guide-col"><span class="badge p1">Player 1</span>
+           <div class="keys-pair">${wasd}<span class="keys-or">or</span>${arrows}</div>
+           <span>WASD or Arrow keys · controls ${names[0]} (top-left corner)</span></div>`;
+  }
+
+  function openCoupleScreen() {
+    Sound.init();
+    Sound.click();
+    syncSetupUI();
+    drawPreviews();
+    showScreen('couple');
+  }
+
+  function openModeScreen() {
+    Sound.click();
+    syncSetupUI();
+    showScreen('mode');
+  }
+
+  document.querySelectorAll('.option[data-couple]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      game.couple = btn.dataset.couple;
+      applyCoupleLooks();
+      Sound.click();
+      syncSetupUI();
+    });
+  });
+
+  document.querySelectorAll('.option[data-mode]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      game.playMode = btn.dataset.mode;
+      Sound.click();
+      syncSetupUI();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Update
   // ---------------------------------------------------------------------------
   function update(dt) {
@@ -1353,36 +1640,56 @@
     const mode = game.mode;
     if (mode === 'paused') return;
 
+    if (game.toastT > 0) {
+      game.toastT -= dt;
+      if (game.toastT <= 0) hideToast();
+    }
+
     if (mode === 'menu' || mode === 'play' || mode === 'dying') {
       for (const ob of game.obstacles) ob.update(dt);
     }
+    if (game.ring) game.ring.spin += dt * 3;
 
     if (mode === 'play') {
       game.time += dt;
-      updatePlayer(dt);
-      const p = game.player;
+      const ctrl = controlledChars();
+      for (const ch of ctrl) {
+        updateControlled(ch, dt);
+        if (ch.invuln > 0) ch.invuln -= dt;
+        if (ch.shield > 0) ch.shield -= dt;
+      }
+      if (!isCoop()) updatePartner(game.chars[1], dt);
 
-      for (const h of game.hearts) {
-        if (!h.got && Math.hypot(h.x - p.x, h.y - p.y) < p.r + T * 0.25) {
-          h.got = true;
-          game.heartsGot++;
-          game.score += 100;
-          burst(h.x, h.y, 8, 'heart', [COLORS.rose, '#f4b6c2'], 0.7);
-          burst(h.x, h.y, 8, 'spark', [COLORS.goldLight, '#ffffff']);
-          Sound.pickup();
+      for (const ch of ctrl) {
+        for (const h of game.hearts) {
+          if (!h.got && Math.hypot(h.x - ch.x, h.y - ch.y) < ch.r + T * 0.25) {
+            h.got = true;
+            game.heartsGot++;
+            game.score += 100;
+            burst(h.x, h.y, 8, 'heart', [COLORS.rose, '#f4b6c2'], 0.7);
+            burst(h.x, h.y, 8, 'spark', [COLORS.goldLight, '#ffffff']);
+            Sound.pickup();
+          }
         }
+        if (!game.ring.got && dist(game.ring, ch) < ch.r + T * 0.3) collectRing(ch);
       }
 
-      if (p.invuln <= 0) {
+      if (Math.random() < 0.08 && !game.ring.got) {
+        burst(game.ring.x + rand(-6, 6), game.ring.y + rand(-6, 6), 1, 'spark', [COLORS.goldLight, '#ffffff'], 0.3);
+      }
+
+      outer:
+      for (const ch of ctrl) {
+        if (ch.invuln > 0 || inSafeZone(ch)) continue;
         for (const ob of game.obstacles) {
-          if (ob.harmful && dist(p, ob) < p.r * 0.8 + ob.hitR) {
-            hurt();
-            break;
+          if (ob.harmful && dist(ch, ob) < ch.r * 0.8 + ob.hitR) {
+            hurt(ch);
+            break outer;
           }
         }
       }
 
-      if (game.mode === 'play' && dist(p, game.groom) < T * 0.75) startKiss();
+      if (game.mode === 'play') checkMeeting();
     } else if (mode === 'dying') {
       game.stateT += dt;
       if (game.stateT > 1.2) showLose();
@@ -1397,12 +1704,13 @@
     updateHud();
   }
 
-  let hudCache = {};
+  const hudCache = {};
   function updateHud(force) {
     const vals = {
       level: String(game.level),
       time: fmtTime(game.time),
       hearts: `${game.heartsGot} / ${game.heartsTotal}`,
+      ring: game.hasRing ? 'Found 💍' : 'Missing',
       score: String(game.score),
       lives: String(game.lives)
     };
@@ -1417,20 +1725,27 @@
         hud[k].textContent = vals[k];
       }
     }
+    hud.ring.classList.toggle('found', game.hasRing);
   }
 
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
+  function easeOutBack(x) {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  }
+
   function render() {
     if (!game.maze) return;
     const t = game.clock;
     let sx = 0;
     let sy = 0;
     if (game.shake > 0) {
-      const k = game.shake * 14 * view.dpr;
-      sx = rand(-k, k);
-      sy = rand(-k, k);
+      const amt = game.shake * 14 * view.dpr;
+      sx = rand(-amt, amt);
+      sy = rand(-amt, amt);
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = COLORS.floorA;
@@ -1456,53 +1771,72 @@
       ctx.fill();
     }
 
-    // chuppah & groom
-    const g = game.groom;
-    drawChuppah(ctx, g.x, g.y, t);
+    // the wedding ring
+    const ring = game.ring;
+    if (ring && !ring.got) {
+      const bob = Math.sin(t * 2.5) * 2.5;
+      const glowR = T * (0.55 + Math.sin(t * 4) * 0.08);
+      const g = ctx.createRadialGradient(ring.x, ring.y, 1, ring.x, ring.y, glowR);
+      g.addColorStop(0, 'rgba(255, 238, 190, 0.95)');
+      g.addColorStop(1, 'rgba(255, 238, 190, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(ring.x, ring.y, glowR, 0, Math.PI * 2);
+      ctx.fill();
+      drawRingItem(ctx, ring.x, ring.y + bob + T * 0.05, T * 0.2, ring.spin);
+    }
 
+    drawChuppah(ctx, game.chuppah.x, game.chuppah.y, t);
+
+    // characters and hazards, sorted by y for a little depth
     const kissing = game.mode === 'kiss' || game.mode === 'won';
-    const k = game.kiss;
-    const leanT = kissing && k ? clamp((game.stateT - 0.55) / 0.3, 0, 1) : 0;
-    const leanAmt = game.mode === 'won' ? 1 : leanT;
-    drawGroom(ctx, g.x + (kissing ? T * 0.05 : 0), g.y, {
-      bob: kissing ? 0 : Math.sin(t * 2) * 0.8,
-      lean: -0.2 * leanAmt
+    const lean = game.mode === 'won' ? 1 : kissing ? clamp((game.stateT - 0.55) / 0.3, 0, 1) : 0;
+    const drawables = game.obstacles.map((ob) => ({ y: ob.y, draw: () => ob.draw(ctx) }));
+    game.chars.forEach((ch) => {
+      drawables.push({
+        y: ch.y + 0.01,
+        draw: () => {
+          let alpha = 1;
+          const controlled = controlledChars().includes(ch);
+          if (controlled && ch.invuln > 0 && ch.shield <= 0 && game.mode === 'play') {
+            alpha = Math.sin(t * 30) > 0 ? 1 : 0.35;
+          }
+          if (game.mode === 'dying' && controlled) alpha = Math.max(0, 1 - game.stateT / 1.2);
+          if (ch.shield > 0 && game.mode === 'play') {
+            ctx.strokeStyle = `rgba(201, 162, 75, ${0.35 + 0.25 * Math.sin(t * 10)})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(ch.x, ch.y - T * 0.05, T * 0.55, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          drawPerson(ctx, ch.x, ch.y, ch.look, {
+            bob: ch.moving ? Math.abs(Math.sin(ch.walk)) * -2 : 0,
+            lean: kissing ? (ch.index === 0 ? 0.2 : -0.2) * lean : 0,
+            alpha
+          });
+          if (isCoop() && !kissing) {
+            drawTag(ctx, ch.x, ch.y - T * 0.78, `P${ch.index + 1}`, ch.index === 0 ? COLORS.rose : COLORS.p2);
+          }
+        }
+      });
     });
-
-    // obstacles (sorted by y for a little depth)
-    const obs = game.obstacles.slice().sort((a, b) => a.y - b.y);
-    for (const ob of obs) ob.draw(ctx);
-
-    // bride
-    const p = game.player;
-    let alpha = 1;
-    if (p.invuln > 0 && game.mode === 'play') alpha = Math.sin(t * 30) > 0 ? 1 : 0.35;
-    if (game.mode === 'dying') alpha = Math.max(0, 1 - game.stateT / 1.2);
-    drawBride(ctx, p.x, p.y, {
-      bob: p.moving ? Math.abs(Math.sin(p.walk)) * -2 : 0,
-      lean: kissing ? 0.2 * leanAmt : 0,
-      alpha
-    });
+    drawables.sort((a, b) => a.y - b.y).forEach((d) => d.draw());
 
     // kiss heart
+    const k = game.kiss;
     if (kissing && k && k.popped) {
       const kt = game.mode === 'won' ? 2 : game.stateT - 0.85;
       const sc = kt < 0.4 ? easeOutBack(kt / 0.4) : 1 + Math.sin(kt * 6) * 0.05;
       ctx.fillStyle = COLORS.rose;
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1.5;
-      heartPath(ctx, g.x - T * 0.12, g.y - T * 0.78, T * 0.7 * sc);
+      heartPath(ctx, game.chuppah.x, game.chuppah.y - T * 0.8, T * 0.75 * sc);
       ctx.fill();
       ctx.stroke();
+      drawRingItem(ctx, game.chuppah.x + T * 0.42, game.chuppah.y - T * 0.98, T * 0.12, 0);
     }
 
     drawParticles(ctx);
-  }
-
-  function easeOutBack(x) {
-    const c1 = 1.70158;
-    const c3 = c1 + 1;
-    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
   }
 
   // ---------------------------------------------------------------------------
@@ -1521,22 +1855,20 @@
   // Input
   // ---------------------------------------------------------------------------
   const KEYMAP = {
-    ArrowUp: 'up', KeyW: 'up',
-    ArrowDown: 'down', KeyS: 'down',
-    ArrowLeft: 'left', KeyA: 'left',
-    ArrowRight: 'right', KeyD: 'right'
+    KeyW: ['p1', 'up'], KeyS: ['p1', 'down'], KeyA: ['p1', 'left'], KeyD: ['p1', 'right'],
+    ArrowUp: ['p2', 'up'], ArrowDown: ['p2', 'down'], ArrowLeft: ['p2', 'left'], ArrowRight: ['p2', 'right']
   };
 
   function clearInput() {
-    input.up = input.down = input.left = input.right = false;
+    for (const p of [input.p1, input.p2]) p.up = p.down = p.left = p.right = false;
     document.querySelectorAll('.dp.active').forEach((b) => b.classList.remove('active'));
   }
 
   window.addEventListener('keydown', (e) => {
-    const dir = KEYMAP[e.code];
-    if (dir) {
+    const map = KEYMAP[e.code];
+    if (map) {
       if (game.mode === 'play') e.preventDefault();
-      input[dir] = true;
+      input[map[0]][map[1]] = true;
       return;
     }
     if (e.code === 'KeyP' || e.code === 'Escape') {
@@ -1552,8 +1884,8 @@
   });
 
   window.addEventListener('keyup', (e) => {
-    const dir = KEYMAP[e.code];
-    if (dir) input[dir] = false;
+    const map = KEYMAP[e.code];
+    if (map) input[map[0]][map[1]] = false;
   });
 
   window.addEventListener('blur', () => {
@@ -1565,13 +1897,13 @@
     if (document.hidden && game.mode === 'play') togglePause();
   });
 
-  // Touch D-pad
+  // Touch D-pad drives Player 1
   const isTouch = 'ontouchstart' in window || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
   if (isTouch) document.body.classList.add('touch');
   document.querySelectorAll('.dp').forEach((btn) => {
     const dir = btn.dataset.dir;
-    const on = (e) => { e.preventDefault(); input[dir] = true; btn.classList.add('active'); };
-    const off = (e) => { e.preventDefault(); input[dir] = false; btn.classList.remove('active'); };
+    const on = (e) => { e.preventDefault(); input.p1[dir] = true; btn.classList.add('active'); };
+    const off = (e) => { e.preventDefault(); input.p1[dir] = false; btn.classList.remove('active'); };
     btn.addEventListener('pointerdown', on);
     btn.addEventListener('pointerup', off);
     btn.addEventListener('pointerleave', off);
@@ -1584,7 +1916,11 @@
     $('btnMute').classList.toggle('off', Sound.muted);
   }
 
-  $('btnStart').addEventListener('click', newGame);
+  $('btnStart').addEventListener('click', openCoupleScreen);
+  $('btnCoupleBack').addEventListener('click', () => { Sound.click(); showScreen('start'); });
+  $('btnCoupleNext').addEventListener('click', openModeScreen);
+  $('btnModeBack').addEventListener('click', openCoupleScreen);
+  $('btnBegin').addEventListener('click', newGame);
   $('btnResume').addEventListener('click', togglePause);
   $('btnQuit').addEventListener('click', toMenu);
   $('btnNext').addEventListener('click', nextLevel);
@@ -1601,8 +1937,9 @@
   window.addEventListener('resize', resize);
 
   // ---------------------------------------------------------------------------
-  // Boot: show an animated preview maze behind the start screen
+  // Boot: animated preview maze behind the title screen
   // ---------------------------------------------------------------------------
+  loadSetup();
   buildLevel(1);
   showBest();
   requestAnimationFrame((now) => {

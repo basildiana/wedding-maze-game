@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Path to the Chuppah — A Wedding Maze Game</title>
-  <meta name="description" content="A romantic wedding-themed maze game. Guide the Bride through the maze to meet her Groom under the chuppah." />
+  <meta name="description" content="A romantic wedding-themed maze game. Guide the couple through the maze to meet under the chuppah at its centre." />
   <meta name="theme-color" content="#f7dfe3" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%8D%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
@@ -25,6 +25,10 @@
         <span class="hud-value" id="hudHearts">0 / 0</span>
       </div>
       <div class="hud-item">
+        <span class="hud-label">Ring</span>
+        <span class="hud-value ring-status" id="hudRing">Missing</span>
+      </div>
+      <div class="hud-item">
         <span class="hud-label">Score</span>
         <span class="hud-value" id="hudScore">0</span>
       </div>
@@ -40,23 +44,78 @@
 
     <section class="stage" id="stage">
       <canvas id="game" aria-label="Wedding maze game board"></canvas>
+      <div class="toast" id="toast" role="status"></div>
 
-      <!-- Start screen -->
+      <!-- Title screen -->
       <div class="overlay show" id="screenStart">
         <div class="card">
           <div class="rings" aria-hidden="true">💍</div>
           <h1 class="script">Path to the Chuppah</h1>
           <p class="subtitle">A wedding maze adventure</p>
           <div class="divider" aria-hidden="true"><span>❦</span></div>
-          <p>Guide the <strong>Bride</strong> through the maze to meet her <strong>Groom</strong> under the chuppah.</p>
-          <ul class="howto">
-            <li><kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move</li>
-            <li>Collect <span class="pink">♥ hearts</span> for bonus points</li>
-            <li>Dodge flying rings, champagne corks, wandering guests &amp; ringing clocks</li>
-            <li><kbd>P</kbd> pause · <kbd>M</kbd> sound</li>
-          </ul>
+          <p>Two hearts start in opposite corners of the maze. Find the <strong>wedding ring</strong>, dodge the chaos, and meet under the <strong>chuppah</strong> at the centre for the wedding kiss.</p>
           <button class="btn primary" id="btnStart">Start Game</button>
           <p class="best" id="bestScore"></p>
+        </div>
+      </div>
+
+      <!-- Setup step 1: couple -->
+      <div class="overlay" id="screenCouple">
+        <div class="card wide">
+          <p class="subtitle">Step 1 of 2</p>
+          <h2 class="script">Choose Your Couple</h2>
+          <div class="divider" aria-hidden="true"><span>❦</span></div>
+          <div class="options three" role="radiogroup" aria-label="Couple">
+            <button class="option" role="radio" data-couple="mw">
+              <canvas class="preview" data-couple="mw" aria-hidden="true"></canvas>
+              <span class="opt-title">Woman &amp; Man</span>
+            </button>
+            <button class="option" role="radio" data-couple="ww">
+              <canvas class="preview" data-couple="ww" aria-hidden="true"></canvas>
+              <span class="opt-title">Two Women</span>
+            </button>
+            <button class="option" role="radio" data-couple="mm">
+              <canvas class="preview" data-couple="mm" aria-hidden="true"></canvas>
+              <span class="opt-title">Two Men</span>
+            </button>
+          </div>
+          <div class="row-btns">
+            <button class="btn ghost" id="btnCoupleBack">Back</button>
+            <button class="btn primary" id="btnCoupleNext">Next</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Setup step 2: mode & controls -->
+      <div class="overlay" id="screenMode">
+        <div class="card wide">
+          <p class="subtitle">Step 2 of 2</p>
+          <h2 class="script">Choose Game Mode</h2>
+          <div class="divider" aria-hidden="true"><span>❦</span></div>
+          <div class="options two" role="radiogroup" aria-label="Game mode">
+            <button class="option" role="radio" data-mode="single">
+              <span class="opt-icon" aria-hidden="true">♥</span>
+              <span class="opt-title">Single Player</span>
+              <span class="opt-desc" id="descSingle">Guide one partner through the maze while the other makes their own way to the chuppah.</span>
+            </button>
+            <button class="option" role="radio" data-mode="coop">
+              <span class="opt-icon" aria-hidden="true">♥♥</span>
+              <span class="opt-title">2 Players (Co-op)</span>
+              <span class="opt-desc">Each player guides one partner at the same time. You share lives — meet under the chuppah together.</span>
+            </button>
+          </div>
+          <h3 class="guide-title">Controls</h3>
+          <div class="controls-guide" id="controlsGuide"></div>
+          <ul class="howto">
+            <li>Find the one <span class="gold">💍 wedding ring</span> — you can't kiss without it!</li>
+            <li>Collect <span class="pink">♥ hearts</span> for bonus points</li>
+            <li>Dodge wandering guests, popping champagne corks &amp; ringing clocks</li>
+            <li>The chuppah is a safe zone · <kbd>P</kbd> pause · <kbd>M</kbd> sound</li>
+          </ul>
+          <div class="row-btns">
+            <button class="btn ghost" id="btnModeBack">Back</button>
+            <button class="btn primary" id="btnBegin">Begin the Wedding</button>
+          </div>
         </div>
       </div>
 
@@ -65,6 +124,7 @@
         <div class="card small">
           <h2 class="script">Paused</h2>
           <p>Take a breath — the guests will wait.</p>
+          <p class="pause-controls" id="pauseControls"></p>
           <button class="btn primary" id="btnResume">Resume</button>
           <button class="btn ghost" id="btnQuit">Main Menu</button>
         </div>
@@ -97,7 +157,7 @@
       </div>
     </section>
 
-    <!-- Touch controls (shown only on touch devices) -->
+    <!-- Touch controls (shown only on touch devices; drives Player 1) -->
     <div class="dpad" id="dpad" aria-hidden="true">
       <button data-dir="up" class="dp up">▲</button>
       <button data-dir="left" class="dp left">◀</button>
